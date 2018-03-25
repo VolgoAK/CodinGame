@@ -1,4 +1,5 @@
 
+package Botg
 import java.awt.geom.Point2D
 import java.util.*
 
@@ -80,6 +81,7 @@ val rangerType = "IRONMAN"
 var team = 0
 val enemyUnits = mutableListOf<Unit>()
 val myUnits = mutableListOf<Unit>()
+val groots = mutableListOf<Unit>()
 var tankHero = Unit()
 var rangeHero = Unit()
 var enemyHero = Unit()
@@ -88,28 +90,20 @@ var enemyHero2 = Unit()
 var tower: Unit = Unit()
 var enemyTower: Unit = Unit()
 
-//Scores for move
-val killEnemy = 500
-val damageEnemy = 1
-val damageHero = 2
-val getDamage = 3
-val escape = 100
-val avoidDanger = 100
-val killHero = 1000
-
 fun addUnit(unit: Unit) {
     if (unit.unitType == "UNIT") {
-        System.err.println("Unit range ${unit.attackRange}")
         if (unit.team == team) myUnits.add(unit)
         else enemyUnits.add(unit)
     } else if (unit.unitType == "HERO") {
         if (unit.team == team) {
             if (unit.heroType == tankType) tankHero = unit
-            else rangeHero = unit;
+            else rangeHero = unit
         } else enemyHero = unit
     } else if (unit.unitType == "TOWER") {
         if (unit.team == team) tower = unit
         else enemyTower = unit
+    } else if(unit.unitType == "GROOT") {
+        groots.add(unit)
     }
 }
 
@@ -122,65 +116,63 @@ fun makeMove() {
 }
 
 fun moveHero(hero: Unit) {
-    val moves = mutableListOf<Move>()
-    moves.add(flee(hero))
-    moves.add(attackHero(hero))
-    moves.add(attackUint(hero))
-    moves.add(Move(2, "WAIT"))
-
-    val bestMove = moves.maxBy { move -> move.value }
-    println(bestMove!!.move)
+    //check if hero in danger
+    if(isNeedToFlee(hero)) {
+        println(flee(hero))
+    } else println(attack(hero))
 }
 
-fun flee(hero: Unit): Move {
-    var value = 0
-    if (hero.health < hero.maxHealth / 3) value += avoidDanger
-    if (hero.dist(enemyTower) < enemyTower.attackRange + 100) value += enemyTower.attackRange * getDamage
+fun isNeedToFlee(hero: Unit) : Boolean {
+    var needFlee = hero.health < hero.maxHealth / 3 || hero.dist(enemyTower) < enemyTower.attackRange
+    if(needFlee) return needFlee
 
-    return Move(value, "MOVE ${tower.x} ${tower.y}")
+    val farestFromBase : Unit? = myUnits.maxBy { unit -> unit.dist(tower) }
+    if(farestFromBase == null) return true
+    return hero.dist(tower) > farestFromBase.dist(tower)
 }
 
-fun attackHero(hero: Unit): Move {
-    var value = 0
-    if (enemyHero.dist(enemyTower) > enemyTower.attackRange)  value += 50
-    if (enemyHero.dist(hero) < hero.attackRange){
-        value += hero.attackDamage * damageHero
-        if (enemyHero.health < hero.attackDamage) value += killHero
+fun flee(hero: Unit) : String{
+    if(myUnits.isNotEmpty()) {
+        System.err.print("go behind soldiers")
+        val dist = if(myUnits[0].x > tower.x) -200 else 200
+        return "MOVE ${hero.x + dist} ${hero.y}"
+    } else if(hero.dist(tower) > tower.attackRange){
+        return "MOVE ${tower.x} ${tower.y}"
+    } else {
+        return attack(hero)
     }
-
-
-    return Move(value, "ATTACK_NEAREST HERO")
 }
 
-fun attackUint(hero: Unit): Move {
-    var value = 0
-    if(enemyUnits.isEmpty()) {
-        return Move(-1, "WAIT")
+fun attack(hero: Unit) : String {
+    val magic = doMagic(hero)
+    if(magic != null) return magic
+
+    val attackeable = enemyUnits.filter { unit -> unit.dist(hero) < hero.attackRange }
+    val killable = attackeable.filter { unit -> unit.health < hero.health }
+
+    if(hero.dist(enemyHero) < hero.attackRange || hero.dist(enemyHero2) < hero.attackRange) {
+        return "ATTACK_NEAREST HERO"
     }
 
-    val unitsInRange = enemyUnits.filter { unit -> hero.dist(unit) < hero.attackRange }
-    val killAbleUnits = unitsInRange.filter { unit -> unit.health < hero.attackDamage }
+    if(killable.isNotEmpty()) {
+        return "ATTACK ${killable[0].unitId}"
+    } else if(attackeable.isNotEmpty()) {
+        return "ATTACK ${attackeable[0].unitId}"
+    } else return "ATTACK_NEAREST UNIT"
+}
 
-    if(killAbleUnits.isNotEmpty()) {
-        return Move(6, "ATTACK ${killAbleUnits[0].unitId}")
-    }
+fun doMagic(hero: Unit) : String? {
+    if(hero.heroType != rangerType) return null
+    val magic = hero.countDown2 == 0 && hero.mana > 60
+        && hero.dist(enemyHero) < 600
 
-    if(unitsInRange.isNotEmpty()) {
-        return Move(hero.attackDamage * damageEnemy, "ATTACK ${unitsInRange[0].unitId}")
-    }
-
-    val goodUnits = enemyUnits.filter { unit -> unit.dist(enemyTower) > enemyTower.attackRange }
-            .sortedBy { unit -> unit.dist(hero)  }
-    if(goodUnits.isNotEmpty()) {
-        return Move(3, "ATTACK ${goodUnits[0].unitId}")
-    }
-
-    return Move(0, "ATTACK ${enemyUnits[0].unitId}")
+    return if(magic) "FIREBALL ${enemyHero.x} ${enemyHero.y}" else null
 }
 
 fun clear() {
     enemyUnits.clear()
     myUnits.clear()
+    groots.clear()
 }
 
 open class Unit {
@@ -207,10 +199,6 @@ open class Unit {
     var isVisible = 0
     var itemsOwned = 0
 
-    fun dist(other: Unit): Double {
-        return Point2D.distance(x.toDouble(), y.toDouble(), other.x.toDouble(), other.y.toDouble())
-    }
-
     fun update(newState : Unit) {
         x = newState.x
         y = newState.y
@@ -221,6 +209,17 @@ open class Unit {
         movementSpeed = newState.movementSpeed
 
     }
+
+    fun dist(other: Unit): Double {
+        return Point2D.distance(x.toDouble(), y.toDouble(), other.x.toDouble(), other.y.toDouble())
+    }
 }
 
 data class Move(val value: Int, val move: String)
+
+ abstract class Desicion{
+    var right : Desicion? = null
+    var left : Desicion? = null
+
+    abstract fun getMove(hero : Unit) : Move
+}
